@@ -6,7 +6,7 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Struct.h"
 #include "Core/Components/SmartInteractionComponent.h"
-#include "NPCS/BaseAiController.h"
+#include "NPCS/BehaviorTreeHelpers.h"
 #include "NPCS/Blackboard/ExecutionTasksData.h"
 #include "NPCS/Blackboard/NPCBlackboardData.h"
 #include "NPCS/Tasks/BasedInteractionTask.h"
@@ -19,32 +19,18 @@ UBTTask_ExtractExecutionTasks::UBTTask_ExtractExecutionTasks()
 
 EBTNodeResult::Type UBTTask_ExtractExecutionTasks::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
-	ABaseAiController* AIController = Cast<ABaseAiController>(OwnerComp.GetAIOwner());
-	if(!AIController)
+	NPCBehaviorTree::FContext Context;
+	if (!NPCBehaviorTree::TryGetContext(OwnerComp, Context))
 	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
 		return EBTNodeResult::Failed;
 	}
-	ABaseNPC* NPCOwner = AIController->GetNPCOwner();
-	if(!NPCOwner)
-	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	//save selected smartobjectcomponent to blackboard
-	UBlackboardComponent* BBComponent = AIController->GetBlackboardComponent();
-	if ( !BBComponent )
-	{
-		UE_LOG(LogTemp, Error, TEXT("BBComponent is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	//get saved smart object from blackboard
-	const USmartInteractionComponent* InteractionComponent = 
+
+	UBlackboardComponent* BBComponent = Context.Blackboard;
+	const USmartInteractionComponent* InteractionComponent =
 		Cast<USmartInteractionComponent>(BBComponent->GetValueAsObject(UNPCBlackboardData::SelectedInteractionKey));
-	if ( !InteractionComponent )
+	if (!InteractionComponent)
 	{
-		UE_LOG(LogTemp, Error, TEXT("InteractionComponent is NULL"));
-		//reset tasks if no smart object exists
+		UE_LOG(LogTemp, Warning, TEXT("%s: No smart interaction is selected"), *NodeName);
 		const FExecutionTasksData EmptyTasks;
 		BBComponent->SetValue<UBlackboardKeyType_Struct>(UNPCBlackboardData::ExecutionTasksKey,
 			FConstStructView::Make(EmptyTasks));
@@ -60,20 +46,19 @@ EBTNodeResult::Type UBTTask_ExtractExecutionTasks::ExecuteTask(UBehaviorTreeComp
 	{
 		if (!IsValid(SourceTask.Get()))
 		{
-			UE_LOG(LogTemp, Error, TEXT("Interaction contains an invalid task"));
+			UE_LOG(LogTemp, Error, TEXT("%s: Selected interaction contains an invalid task definition"), *NodeName);
 			return EBTNodeResult::Failed;
 		}
 
 		ExecutionTasks.Add(DuplicateObject<UBasedInteractionTask>(SourceTask.Get(), BBComponent));
 	}
 
-	//save extracted tasks into blackboard
 	const FExecutionTasksData TasksData(MoveTemp(ExecutionTasks));
-	const bool bStored = BBComponent->SetValue<UBlackboardKeyType_Struct>( UNPCBlackboardData::ExecutionTasksKey,
-											FConstStructView::Make(TasksData));
+	const bool bStored = BBComponent->SetValue<UBlackboardKeyType_Struct>(UNPCBlackboardData::ExecutionTasksKey,
+		FConstStructView::Make(TasksData));
 	if (!bStored)
 	{
-		UE_LOG(LogTemp, Error, TEXT("ExecutionTasks not stored"));
+		UE_LOG(LogTemp, Error, TEXT("%s: Could not write ExecutionTasks to Blackboard"), *NodeName);
 		return EBTNodeResult::Failed;
 	}
 	

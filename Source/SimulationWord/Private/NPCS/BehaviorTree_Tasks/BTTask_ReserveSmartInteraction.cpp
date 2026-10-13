@@ -7,9 +7,8 @@
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Struct.h"
 #include "Core/Components/SmartInteractionComponent.h"
 #include "Core/Subsystems/SmartInteractionSubsystem.h"
-#include "Core/Subsystems/WorldTimeSubsystem.h"
-#include "DataAssets/ScheduleTemplateDataAsset.h"
-#include "NPCS/BaseAiController.h"
+#include "Engine/World.h"
+#include "NPCS/BehaviorTreeHelpers.h"
 #include "NPCS/Blackboard/ExecutionTasksData.h"
 #include "NPCS/Blackboard/NPCBlackboardData.h"
 #include "StructUtils/StructView.h"
@@ -19,8 +18,8 @@ UBTTask_ReserveSmartInteraction::UBTTask_ReserveSmartInteraction()
 	NodeName = TEXT("Reserve Smart Interaction");
 }
 
-void UBTTask_ReserveSmartInteraction::ReleasePreviousInteractionComponent(UBlackboardComponent*& BBComponent, 
-																							ABaseNPC*& NPCOwner)
+void UBTTask_ReserveSmartInteraction::ReleasePreviousInteractionComponent(UBlackboardComponent* BBComponent,
+	ABaseNPC* NPCOwner)
 {
 	USmartInteractionComponent* PreviousInteraction = Cast<USmartInteractionComponent>(
 		BBComponent->GetValueAsObject(UNPCBlackboardData::SelectedInteractionKey));
@@ -33,69 +32,46 @@ void UBTTask_ReserveSmartInteraction::ReleasePreviousInteractionComponent(UBlack
 
 EBTNodeResult::Type UBTTask_ReserveSmartInteraction::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
 {
-	ABaseAiController* AIController = Cast<ABaseAiController>(OwnerComp.GetAIOwner());
-	if(!AIController)
+	NPCBehaviorTree::FContext Context;
+	if (!NPCBehaviorTree::TryGetContext(OwnerComp, Context))
 	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
 		return EBTNodeResult::Failed;
 	}
-	ABaseNPC* NPCOwner = AIController->GetNPCOwner();
-	if(!NPCOwner)
+
+	FGameplayTag SmartObjectTag;
+	if (!NPCBehaviorTree::TryGetScheduledActivity(OwnerComp, Context, SmartObjectTag))
 	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
 		return EBTNodeResult::Failed;
 	}
-	const UScheduleTemplateDataAsset* Schedule = NPCOwner->GetNPCSchedule();
-	if(!Schedule)
+
+	const UWorld* World = OwnerComp.GetWorld();
+	USmartInteractionSubsystem* SmartInteractionSubsystem = World ? World->GetSubsystem<USmartInteractionSubsystem>() : nullptr;
+	if (!SmartInteractionSubsystem)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Schedule is NULL"));
+		UE_LOG(LogTemp, Error, TEXT("%s: Smart interaction subsystem is unavailable"), *NodeName);
 		return EBTNodeResult::Failed;
 	}
-	
-	//get current world time
-	const UWorld* World = GetWorld();
-	UWorldTimeSubsystem* WorldTimeSubsystem = World ? World->GetSubsystem<UWorldTimeSubsystem>() : nullptr;
-	if ( !WorldTimeSubsystem )
-	{
-		UE_LOG(LogTemp, Error, TEXT("World time subsystem is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	FTimespan CurrentWorldTime = WorldTimeSubsystem->GetWorldTime();
-	//get smart tag by schedule which object npc should select
-	FGameplayTag SmartObjectTag = Schedule->GetActivationTagAtTime(CurrentWorldTime);
-	//init blackboard
-	UBlackboardComponent* BBComponent = AIController->GetBlackboardComponent();
-	if ( !BBComponent )
-	{
-		UE_LOG(LogTemp, Error, TEXT("BBComponent is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	USmartInteractionSubsystem* SmartInteractionSubsystem = World->GetSubsystem<USmartInteractionSubsystem>();
-	if ( !SmartInteractionSubsystem )
-	{
-		UE_LOG(LogTemp, Error, TEXT("World time subsystem is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	
+
+	UBlackboardComponent* BBComponent = Context.Blackboard;
 	// Release before searching so the previous component's slot is available again.
-	ReleasePreviousInteractionComponent(BBComponent, NPCOwner);
+	ReleasePreviousInteractionComponent(BBComponent, Context.NPC);
 	// UE 5.7's ClearValue skips instanced struct keys because IsEmpty sees their zero-sized buffer.
 	const FExecutionTasksData EmptyTasks;
 	BBComponent->SetValue<UBlackboardKeyType_Struct>(UNPCBlackboardData::ExecutionTasksKey,
 		FConstStructView::Make(EmptyTasks));
 	BBComponent->SetValueAsInt(UNPCBlackboardData::CurrentTaskIndexKey, 0);
 
-	const TWeakObjectPtr<USmartInteractionComponent> SmartObject = 
+	const TWeakObjectPtr<USmartInteractionComponent> SmartObject =
 		SmartInteractionSubsystem->FindAppropriateSmartObject(SmartObjectTag);
 	USmartInteractionComponent* SmartObjectComponent = SmartObject.Get();
-	if ( !IsValid(SmartObjectComponent) )
+	if (!IsValid(SmartObjectComponent))
 	{
-		UE_LOG(LogTemp, Error, TEXT("No appropriate smart object in world"));
+		UE_LOG(LogTemp, Warning, TEXT("%s: No available smart interaction for tag '%s'"),
+			*NodeName, *SmartObjectTag.ToString());
 		return EBTNodeResult::Failed;
 	}
-	//assign owner npc to this smart object ptr
-	SmartObjectComponent->ReserveSmartObject(NPCOwner);
-	//save selected smartobjectcomponent to blackboard
+
+	SmartObjectComponent->ReserveSmartObject(Context.NPC);
 	BBComponent->SetValueAsObject(UNPCBlackboardData::SelectedInteractionKey, SmartObjectComponent);
 	return EBTNodeResult::Succeeded;
 }

@@ -17,7 +17,7 @@ class SIMULATIONWORD_API UBTTask_ReserveSmartInteraction : public UBTTask_Blackb
 	
 	UBTTask_ReserveSmartInteraction();
 
-	void ReleasePreviousInteractionComponent(UBlackboardComponent*& BBComponent, ABaseNPC*& NPCOwner);
+	void ReleasePreviousInteractionComponent(UBlackboardComponent* BBComponent, ABaseNPC* NPCOwner);
 	
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 	

@@ -6,7 +6,8 @@
 #include "BehaviorTree/BehaviorTreeComponent.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Struct.h"
-#include "NPCS/BaseAiController.h"
+#include "NPCS/BaseNPC.h"
+#include "NPCS/BehaviorTreeHelpers.h"
 #include "NPCS/Blackboard/ExecutionTasksData.h"
 #include "NPCS/Blackboard/NPCBlackboardData.h"
 #include "NPCS/Tasks/BasedInteractionTask.h"
@@ -24,26 +25,14 @@ EBTNodeResult::Type UBTTask_ExecuteNextTask::ExecuteTask(UBehaviorTreeComponent&
 {
 	ClearActiveTask(true);
 
-	ABaseAiController* AIController = Cast<ABaseAiController>(OwnerComp.GetAIOwner());
-	if(!AIController)
+	NPCBehaviorTree::FContext Context;
+	if (!NPCBehaviorTree::TryGetContext(OwnerComp, Context))
 	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
 		return EBTNodeResult::Failed;
 	}
-	ABaseNPC* NPCOwner = AIController->GetNPCOwner();
-	if(!NPCOwner)
-	{
-		UE_LOG(LogTemp, Error, TEXT("AIController is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	//save selected smartobjectcomponent to blackboard
-	UBlackboardComponent* BBComponent = AIController->GetBlackboardComponent();
-	if ( !BBComponent )
-	{
-		UE_LOG(LogTemp, Error, TEXT("BBComponent is NULL"));
-		return EBTNodeResult::Failed;
-	}
-	const FConstStructView Value = 
+
+	UBlackboardComponent* BBComponent = Context.Blackboard;
+	const FConstStructView Value =
 		BBComponent->GetValue<UBlackboardKeyType_Struct>(UNPCBlackboardData::ExecutionTasksKey);
 	const FExecutionTasksData* TasksData = Value.GetPtr<const FExecutionTasksData>();
 	if (!TasksData)
@@ -52,9 +41,10 @@ EBTNodeResult::Type UBTTask_ExecuteNextTask::ExecuteTask(UBehaviorTreeComponent&
 	}
 	const TArray<TObjectPtr<UBasedInteractionTask>>& Tasks = TasksData->Tasks;
 	const int32 TaskIndex = BBComponent->GetValueAsInt(UNPCBlackboardData::CurrentTaskIndexKey);
-	if ( !Tasks.IsValidIndex(TaskIndex) )
+	if (!Tasks.IsValidIndex(TaskIndex))
 	{
-		UE_LOG(LogTemp, Error, TEXT("Has not enough tasks"));
+		UE_LOG(LogTemp, Warning, TEXT("%s: Task index %d is outside the task array (size %d)"),
+			*NodeName, TaskIndex, Tasks.Num());
 		return EBTNodeResult::Failed;
 	}
 	ActiveTask = Tasks[TaskIndex].Get();
@@ -66,9 +56,9 @@ EBTNodeResult::Type UBTTask_ExecuteNextTask::ExecuteTask(UBehaviorTreeComponent&
 	// Bind before Start because the task may finish immediately.
 	TaskFinishedHandle = ActiveTask->OnFinished.AddUObject(this, &UBTTask_ExecuteNextTask::HandleTaskFinished);
 	bStartingTask = true;
-	const bool bAccepted = ActiveTask->Start(NPCOwner);
+	const bool bAccepted = ActiveTask->Start(Context.NPC);
 	bStartingTask = false;
-	//some tasks can be successfully finished in one frame
+	// Return immediate completion directly from ExecuteTask.
 	if (bAccepted && ActiveTask->GetState() == EInteractionTaskState::Running)
 	{
 		return EBTNodeResult::InProgress;
@@ -119,7 +109,6 @@ void UBTTask_ExecuteNextTask::OnInstanceDestroyed(UBehaviorTreeComponent& OwnerC
 void UBTTask_ExecuteNextTask::ClearActiveTask(bool bCancelRunningTask)
 {
 	UBasedInteractionTask* Task = ActiveTask.Get();
-	//remove delegate
 	if (IsValid(Task))
 	{
 		Task->OnFinished.Remove(TaskFinishedHandle);
